@@ -1,13 +1,21 @@
 {
-	"Allocation" :
-	[
+	"Allocation":
 		{
-			"VirtualMachine": "d18a301a-5daf-42b5-912e-e35f1206b8a1",
-			"FloatingIP": "10.55.164.42"
-		},
-		{
-			"VirtualMachine": "40d162f9-07c9-4cda-9dbd-75f581cdab23",
-			"FloatingIP": "10.55.164.41"
+			"Type":"PublicIP",
+			"Attributes":{
+                "VM":"807222eb-1ee0-4bb6-9823-20990f619b25",
+                "IP": "10.55.164.42"
+            }	
 		}
-	]
+}
+
+{
+   "Allocation":
+      {
+         "ID":"mySub1",
+         "Type":"Subnet",
+         "Attributes":{
+            "AddressRange":"192.168.0.0/24"
+         }
+      }
 }
