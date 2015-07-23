@@ -1,5 +1,6 @@
 {
 	"Allocation":
+	[
 		{
 			"Type":"PublicIP",
 			"Attributes":{
@@ -7,10 +8,12 @@
                 "IP": "10.55.164.42"
             }	
 		}
+	]
 }
 
 {
    "Allocation":
+   [
       {
          "ID":"mySub1",
          "Type":"Subnet",
@@ -18,4 +21,5 @@
             "AddressRange":"192.168.0.0/24"
          }
       }
+    ]
 }

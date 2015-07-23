@@ -187,67 +187,84 @@ def createReservation():
     return error
 
   try:
-    allocation = req['Allocation']
+    allocations = req.get("Allocation")
     availableFloatingIPs = getAvailableFloatingIPs()
+    availableSubnets = getAvailableSubnets()
+    print "availableFloatingIPs",availableFloatingIPs
+    print "availableSubnets",availableSubnets
     reservations = []
     
-    #for allocation in allocations:
-    typeN = allocation['Type']
-    
-    #print "vmID",vmID
-    #print "floatingIP",floatingIP
-
-    print "typeN",typeN
-    
-    if typeN == "PublicIP":
-      vmID = allocation['Attributes']['VM']
-      floatingIP = allocation['Attributes']['IP']
-      if floatingIP in availableFloatingIPs:
-        novaIn = ["nova", "add-floating-ip", vmID, floatingIP]
-        process = subprocess.Popen(novaIn, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        novaOut, novaErr = process.communicate()
-        
-        availableFloatingIPs = getAvailableFloatingIPs()
-        if floatingIP in availableFloatingIPs: #If IP still available then it wasn't properly added to VM
-          raise Exception("IP not associated to VM")
-        else:
-          reservations.append(getIDFromFloatingIP(floatingIP))
-        
-      else:
-        raise Exception
-    elif typeN == "Subnet":
-      #subnetIDS = []
-      neutronIn = ["neutron", "subnet-create", "demo-net", "--name", allocation['ID'], allocation['Attributes']['AddressRange']]
-      process = subprocess.Popen(neutronIn, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-      neutronOut, neutronErr = process.communicate()
-
-      if (neutronOut.find("Created a new subnet") != -1):
-        neutronOut = neutronOut.splitlines()
-        reservations.append([x for x in neutronOut if " id " in x][0].split("|")[2].strip())  #Extract the subnet id from the returned string and add to array
-      else:
-        reservations.append("ERROR (see logs)- Couldn't create " + allocation['ID'] + " @ " + allocation['Attributes']['AddressRange'])  #FIX ME - Waht should I do if failure
-        logger.error(neutronErr)
-        raise Exception(neutronErr)
-
-      reservations = {"Reservations": reservations}
+    for allocation in allocations:
+      typeN = allocation['Type']
       
-      response.set_header('Content-Type', 'application/json')
-      response.set_header('Accept', '*/*')
-      response.set_header('Allow', 'GET, HEAD')
+      #print "vmID",vmID
+      #print "floatingIP",floatingIP
+
+      print "typeN",typeN
+      
+      if typeN == "PublicIP":
+        vmID = allocation.get("Attributes").get("VM")
+        floatingIP = allocation.get("Attributes").get("IP")
+        print "VM",vmID
+        print "IP",floatingIP
+
+        if floatingIP in availableFloatingIPs:
+          novaIn = ["nova", "add-floating-ip", vmID, floatingIP]
+          process = subprocess.Popen(novaIn, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+          novaOut, novaErr = process.communicate()
+          
+          availableFloatingIPs = getAvailableFloatingIPs()
+          if floatingIP in availableFloatingIPs: #If IP still available then it wasn't properly added to VM
+            raise Exception("IP not associated to VM")
+          else:
+            reservations.append(getIDFromFloatingIP(floatingIP))
+          
+        else:
+          raise Exception("floatingIP not available")
+      elif typeN == "Subnet":
+        name = "HARNESS-"+allocation.get("ID")
+        cidr = allocation.get("Attributes").get("AddressRange")
+
+        print "cidr",cidr
+        
+        if cidr not in availableSubnets:
+          neutronIn = ["neutron", "subnet-create", "demo-net", "--name", name, cidr]
+          process = subprocess.Popen(neutronIn, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+          neutronOut, neutronErr = process.communicate()
+
+          if (neutronOut.find("Created a new subnet") != -1):
+            neutronOut = neutronOut.splitlines()
+            reservations.append([x for x in neutronOut if " id " in x][0].split("|")[2].strip())  #Extract the subnet id from the returned string and add to array
+          else:
+            reservations.append("ERROR (see logs)- Couldn't create " + allocation.get("ID") + " @ " + allocation.get("Attributes").get("AddressRange"))  #FIX ME - Waht should I do if failure
+            logger.error(neutronErr)
+            raise Exception(neutronErr)
+        else:
+          raise Exception("cidr already used")
+
+      #reservations = {"Reservations": reservations}
+      
+      #response.set_header('Content-Type', 'application/json')
+      #response.set_header('Accept', '*/*')
+      #response.set_header('Allow', 'GET, HEAD')
       
       #logger.info("Completed")
       #return subnetIDS
 
       
-  except Exception.message,e:
-    print "unable to process the request",e
+  #except Exception.message,e:
+  #  print "unable to process the request",e
     #logger.error("Unable to reserve floating ip " + floatingIP + " for " + vmID)
     #reservations.append("Unable to add ip " + floatingIP + " to " + vmID + ". Check VM and IP exist and are unnassigned")
   #except StandardError,e:
   #  print "Unable to create subnet",e
     #logger.error("Unable to reserve floating ip " + floatingIP + " for " + vmID)
     #reservations.append("Unable to add ip " + floatingIP + " to " + vmID + ". Check VM and IP exist and are unnassigned")
-  
+  except Exception,e:
+    error = "unable to process the request: "+e
+    print error
+    logger.error(error)
+
   response.set_header('Content-Type', 'application/json')
   response.set_header('Accept', '*/*')
   response.set_header('Allow', 'GET, HEAD')
@@ -340,9 +357,10 @@ def releaseReservation():
 def releaseAllReservations():
   logger.info("Called")
   
-  neutronEntries = getNeutronEntries()
+  neutronFIPEntries = getNeutronFIPEntries()
+  neutronSubnetsEntries = getAvailableSubnets()
 
-  for neutronEntry in neutronEntries:
+  for neutronEntry in neutronFIPEntries:
     if neutronEntry["fixedIP"] != "":
       disassociateFloatingIP(neutronEntry["ID"])
   
@@ -437,9 +455,9 @@ def disassociateFloatingIP(floatingIPID):
   return (neutronOut, neutronErr)
 
 
-def getNeutronEntries():
+def getNeutronFIPEntries():
   logger.info("Called")
-  neutronEntries = []
+  neutronFIPEntries = []
   
   neutronIn = ["neutron", "floatingip-list"]
   process = subprocess.Popen(neutronIn, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -452,28 +470,48 @@ def getNeutronEntries():
     entry["fixedIP"] = neutronEntry.split("|")[2].strip()
     entry["floatingIP"] = neutronEntry.split("|")[3].strip()
     entry["portID"] = neutronEntry.split("|")[4].strip()
-    neutronEntries.append(entry)
+    neutronFIPEntries.append(entry)
   
   logger.info("Completed")
-  return neutronEntries
+  return neutronFIPEntries
 
 
 def getAvailableFloatingIPs():
   logger.info("Called")
   availableFloatingIPs = []
 
-  neutronEntries = getNeutronEntries()
-  for neutronEntry in neutronEntries:
+  neutronFIPEntries = getNeutronFIPEntries()
+  for neutronEntry in neutronFIPEntries:
     if neutronEntry["fixedIP"] == "":
       availableFloatingIPs.append(neutronEntry["floatingIP"])
   
   logger.info("Completed")
   return availableFloatingIPs
 
+def getAvailableSubnets():
+  logger.info("Called")
+  neutronSubnetsEntries = []
+  
+  neutronIn = ["neutron", "subnet-list"]
+  process = subprocess.Popen(neutronIn, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  neutronOut, neutronErr = process.communicate()
+  
+  neutronOut = neutronOut.splitlines()[3:-1]
+  for neutronEntry in neutronOut:
+    entry = {}
+    #entry["ID"] = neutronEntry.split("|")[1].strip()
+    entry["name"] = neutronEntry.split("|")[2].strip()
+    entry["cidr"] = neutronEntry.split("|")[3].strip()
+    #entry["allocationPools"] = neutronEntry.split("|")[4].strip()
+    #cidr = neutronEntry.split("|")[3].strip()
+    neutronSubnetsEntries.append(entry)
+  
+  logger.info("Completed")
+  return neutronSubnetsEntries
 
 def getEntryFromID(entryID):
   logger.info("Called")
-  neutronEntries = getNeutronEntries()
+  neutronEntries = getNeutronFIPEntries()
   
   for neutronEntry in neutronEntries:
     if neutronEntry["ID"] == entryID:
@@ -486,7 +524,7 @@ def getEntryFromID(entryID):
 
 def getIDFromFloatingIP(floatingIP):
   logger.info("Called")
-  neutronEntries = getNeutronEntries()
+  neutronEntries = getNeutronFIPEntries()
   
   for neutronEntry in neutronEntries:
     if neutronEntry["floatingIP"] == floatingIP:
