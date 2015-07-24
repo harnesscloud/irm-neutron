@@ -7,19 +7,13 @@
                 "VM":"807222eb-1ee0-4bb6-9823-20990f619b25",
                 "IP": "10.55.164.42"
             }	
-		}
-	]
-}
-
-{
-   "Allocation":
-   [
-      {
+		},
+		{
          "ID":"mySub1",
          "Type":"Subnet",
          "Attributes":{
             "AddressRange":"192.168.0.0/24"
          }
       }
-    ]
+	]
 }

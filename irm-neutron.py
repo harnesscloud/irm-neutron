@@ -261,7 +261,7 @@ def createReservation():
     #logger.error("Unable to reserve floating ip " + floatingIP + " for " + vmID)
     #reservations.append("Unable to add ip " + floatingIP + " to " + vmID + ". Check VM and IP exist and are unnassigned")
   except Exception,e:
-    error = "unable to process the request: "+e
+    error = "unable to process the request: ",e
     print error
     logger.error(error)
 
@@ -292,15 +292,27 @@ def checkReservation():
 
     for reservationID in reservationIDs:
       reservation = {}
-      neutronEntry = getEntryFromID(reservationID)
-      
-      reservation["Ready"] = False
-      if (neutronEntry != False):
-          if (neutronEntry["fixedIP"] != ""):
-            reservation["Address"] = neutronEntry["floatingIP"]
-            reservation["Ready"] = True
+      neutronEntry = getFIPEntryFromID(reservationID)
+
+      if neutronEntry:
+        reservation["Ready"] = False
+        #if (neutronEntry != False):
+        if (neutronEntry["fixedIP"] != ""):
+          reservation["Address"] = neutronEntry["floatingIP"]
+          reservation["Ready"] = True
+        #else:
+        #  reservation["ERROR"] = "No matching reservation for " + reservationID
       else:
-        reservation["ERROR"] = "No matching reservation for " + reservationID
+        neutronEntry = getSubnetEntryFromID(reservationID)
+        if neutronEntry:
+          #reservation["Ready"] = False
+          #if (neutronEntry != False):
+          #if (neutronEntry["fixedIP"] != ""):
+          reservation["ID"] = neutronEntry["name"]
+          reservation["AddressRange"] = neutronEntry["cidr"]
+          reservation["Ready"] = True
+        else:
+          reservation["ERROR"] = "No matching reservation for " + reservationID
         
       reservations[reservationID] = reservation
       
@@ -336,14 +348,20 @@ def releaseReservation():
 
   try:
     reservationIDs = req.get("ReservationID")
+    availableFloatingIPIDs = getAvailableFloatingIPIDs()
+    availableSubnetsIDs = getAvailableSubnetsIDs()
     
-    for reservationID in reservationIDs: 
-      disassociateFloatingIP(reservationID)
+    for reservationID in reservationIDs:
+      if reservationID in availableSubnetsIDs:
+        deleteSubnet(reservationID)
+      elif reservationID in availableFloatingIPIDs:
+       disassociateFloatingIP(reservationID)
     
     logger.info("Completed")
     return {"result":{}}
 
-  except:
+  except Exception.message,e:
+    print e
     msg = "releaseReservation didn't execute properly, please check payload and neutron status"
     print msg
     logger.error(msg)
@@ -359,6 +377,10 @@ def releaseAllReservations():
   
   neutronFIPEntries = getNeutronFIPEntries()
   neutronSubnetsEntries = getAvailableSubnets()
+
+  for subnet in neutronSubnetsEntries:
+    if "HARNESS" in subnet.get('name'):
+      deleteSubnet(subnet.get('ID'))
 
   for neutronEntry in neutronFIPEntries:
     if neutronEntry["fixedIP"] != "":
@@ -454,6 +476,14 @@ def disassociateFloatingIP(floatingIPID):
   logger.info("Completed")
   return (neutronOut, neutronErr)
 
+def deleteSubnet(subnetID):
+  logger.info("Called")
+  neutronIn = ["neutron", "subnet-delete", subnetID]
+  process = subprocess.Popen(neutronIn, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  neutronOut, neutronErr = process.communicate()
+  
+  logger.info("Completed")
+  return (neutronOut, neutronErr)
 
 def getNeutronFIPEntries():
   logger.info("Called")
@@ -488,6 +518,18 @@ def getAvailableFloatingIPs():
   logger.info("Completed")
   return availableFloatingIPs
 
+def getAvailableFloatingIPIDs():
+  logger.info("Called")
+  availableFloatingIPIDs = []
+
+  neutronFIPEntries = getNeutronFIPEntries()
+  for neutronEntry in neutronFIPEntries:
+    if neutronEntry["fixedIP"] != "":
+      availableFloatingIPIDs.append(neutronEntry["ID"])
+  
+  logger.info("Completed")
+  return availableFloatingIPIDs
+
 def getAvailableSubnets():
   logger.info("Called")
   neutronSubnetsEntries = []
@@ -499,7 +541,7 @@ def getAvailableSubnets():
   neutronOut = neutronOut.splitlines()[3:-1]
   for neutronEntry in neutronOut:
     entry = {}
-    #entry["ID"] = neutronEntry.split("|")[1].strip()
+    entry["ID"] = neutronEntry.split("|")[1].strip()
     entry["name"] = neutronEntry.split("|")[2].strip()
     entry["cidr"] = neutronEntry.split("|")[3].strip()
     #entry["allocationPools"] = neutronEntry.split("|")[4].strip()
@@ -509,7 +551,30 @@ def getAvailableSubnets():
   logger.info("Completed")
   return neutronSubnetsEntries
 
-def getEntryFromID(entryID):
+def getAvailableSubnetsIDs():
+  logger.info("Called")
+  neutronSubnetsEntriesID = []
+  
+  neutronIn = ["neutron", "subnet-list"]
+  process = subprocess.Popen(neutronIn, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  neutronOut, neutronErr = process.communicate()
+  
+  neutronOut = neutronOut.splitlines()[3:-1]
+  for neutronEntry in neutronOut:
+    if "HARNESS" in neutronEntry.split("|")[2].strip():
+      #entry = {}
+      #entry["ID"] = neutronEntry.split("|")[1].strip()
+      #entry["name"] = neutronEntry.split("|")[2].strip()
+      #entry["cidr"] = neutronEntry.split("|")[3].strip()
+      #entry["allocationPools"] = neutronEntry.split("|")[4].strip()
+      #cidr = neutronEntry.split("|")[3].strip()
+      ID = neutronEntry.split("|")[1].strip()
+      neutronSubnetsEntriesID.append(ID)
+  
+  logger.info("Completed")
+  return neutronSubnetsEntriesID
+
+def getFIPEntryFromID(entryID):
   logger.info("Called")
   neutronEntries = getNeutronFIPEntries()
   
@@ -521,6 +586,17 @@ def getEntryFromID(entryID):
   logger.error("Unable to find matching entry for " + entryID)
   return False #If no matching entry found
 
+def getSubnetEntryFromID(entryID):
+  logger.info("Called")
+  neutronEntries = getAvailableSubnets()
+  
+  for neutronEntry in neutronEntries:
+    if neutronEntry["ID"] == entryID:
+      logger.info("Completed")
+      return neutronEntry
+  
+  logger.error("Unable to find matching entry for " + entryID)
+  return False #If no matching entry found
 
 def getIDFromFloatingIP(floatingIP):
   logger.info("Called")
