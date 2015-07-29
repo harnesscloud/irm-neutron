@@ -156,12 +156,16 @@ def computeCapacity():
     logger.error(error)
     return error
 
-  resources = req.get("Resource")
+  resource = req.get("Resource")
   allocations = req.get("Allocation")
   releases = req.get("Release")
-  
-  resources = resources + list(set(releases) - set(resources))
-  resources = [entry for entry in resources if entry not in allocations]
+
+  for release in releases:
+    resource["Attributes"]["IpPool"].append(release["Attributes"]["IP"])
+
+  for allocation in allocations:
+    if allocation["Attributes"]["IP"] in resource["Attributes"]["IpPool"]:
+      resource["Attributes"]["IpPool"].remove(allocation["Attributes"]["IP"])
 
   response.set_header('Content-Type', 'application/json')
   response.set_header('Accept', '*/*')
@@ -169,7 +173,7 @@ def computeCapacity():
 
   logger.info("Completed")
   
-  return {"Resource": resources}
+  return {"Resource": resource}
 
 
 #Expects a list of dictionaries containing "VirtualMachine" (ID/name of VM) and "floatingIP" (floatingIP to assign) 
@@ -222,7 +226,7 @@ def createReservation():
         else:
           raise Exception("floatingIP not available")
       elif typeN == "Subnet":
-        name = "HARNESS-"+allocation.get("ID")
+        name = "HARNESS-"+allocation.get("Attributes").get("name")
         cidr = allocation.get("Attributes").get("AddressRange")
 
         print "cidr",cidr

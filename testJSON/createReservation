@@ -9,9 +9,9 @@
             }	
 		},
 		{
-         "ID":"mySub1",
          "Type":"Subnet",
          "Attributes":{
+            "name":"mySub",
             "AddressRange":"192.168.0.0/24"
          }
       }
