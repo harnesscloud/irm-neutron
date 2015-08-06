@@ -6,6 +6,9 @@ import ConfigParser, optparse
 import logging
 import logging.handlers as handlers
 import socket
+import sys
+import os
+from threading import Thread
 
 #Config and format for logging messages
 logger = logging.getLogger("Rotating Log")
@@ -34,8 +37,25 @@ def init(interface):
   HOST_NAME = socket.gethostname()
   global TYPE
   TYPE = "Network"
+  
+  if CONFIG.has_option('openstack', 'OS_USERNAME'):
+     os.environ['OS_USERNAME'] = CONFIG.get('openstack', 'OS_USERNAME')
+     
+  if CONFIG.has_option('openstack', 'OS_TENANT_NAME'):
+     os.environ['OS_TENANT_NAME'] = CONFIG.get('openstack','OS_TENANT_NAME')
 
+  if CONFIG.has_option('openstack', 'OS_PASSWORD'):
+     os.environ['OS_PASSWORD'] = CONFIG.get('openstack','OS_PASSWORD')
 
+  if CONFIG.has_option('openstack', 'OS_USERNAME'):
+     os.environ['OS_AUTH_URL'] = CONFIG.get('openstack','OS_AUTH_URL')
+  
+  global NET_ID   
+  if CONFIG.has_option('openstack', 'NET_ID'):
+     NET_ID = CONFIG.get('openstack','NET_ID')
+  else:
+     NET_ID = "demo-net"
+     
 def main():
  usage = "Usage: %prog [option] arg"
  #paragraph of help text to print after option help
@@ -103,16 +123,24 @@ def noExtraOptions(options, *arg):
 def getResources():
   logger.info("Called")
 
+
   try:
       availableFloatingIPs = getAvailableFloatingIPs()
-      r = {"Resources" : {"NetworkID-PublicIP" : {"Type" : "PublicIP", "IpPool" : availableFloatingIPs}}}
-      result = json.dumps(r)
+      availableSubnets = [ {"cidr": x["cidr"], "name": x["name"].replace("HARNESS-", "")} \
+         for x in getAvailableSubnets() if ("HARNESS-" in x['name']) ] 
+      
+      public_ips = {"Type" : "PublicIP", "Attributes" : { "IP-Pool": availableFloatingIPs}}
+      subnets = {"Type" : "Subnet", "Attributes" : { "AvailableSubNets": availableSubnets}}
+      
+      r = {"Resources" : {"ID-P0": public_ips, "ID-S0": subnets }}
+       
+      result = json.dumps({"result": r})
 
-  except Exception.message, e:
+  except Exception as e:
      response.status = 400
-     error = {"message" : e, "code" : response.status}
+     error = {"message" : e.message, "code" : response.status}
      logger.error(error)
-     return error
+     return json.dumps({"error": error})
 
   response.set_header('Content-Type', 'application/json')
   response.set_header('Accept', '*/*')
@@ -127,12 +155,18 @@ def getResources():
 def getAllocSpec():
   logger.info("Called")
   
-  PublicIP = {"IP": { "Description": "IP address", "DataType": "string"}, "VM": { "Description": "VM to apply the public IP", "DataType": "string" }}
-  Subnet = {"AddressRange" : { "Description" : "Address range", "DataType": "string" }, "VMs": { "Description": "VMs that belong to this subnet",  "DataType": "list<string>" }}
-  Firewall = {"VMs": { "Description": "VMs that belong", "DataType": "list<string>" }}
-
-  r = {"Types" : {"PublicIP": PublicIP, "Subnet": Subnet, "Firewall": Firewall}}
-  result = json.dumps(r)
+  try:
+     PublicIP = {"IP": { "Description": "IP address", "DataType": "string"}, "VM": { "Description": "VM to apply the public IP (VM reservationID)", "DataType": "string" }}
+     Subnet = {"AddressRange" : { "Description" : "Address range (e.g. 192.163.0.0/24)", "DataType": "string" }, "Name": { "Description": "Name of the subnet",  "DataType": "string" }}
+  
+     r = {"Types" : {"PublicIP": PublicIP, "Subnet": Subnet}}
+     result = json.dumps({"result": r})
+  
+  except Exception as e:
+     response.status = 400
+     error = {"message" : e.message, "code" : response.status}
+     logger.error(error)
+     return json.dumps({"error": error})
 
   response.set_header('Content-Type', 'application/json')
   response.set_header('Accept', '*/*')
@@ -143,29 +177,75 @@ def getAllocSpec():
 
 
 #Expects three lists (Resource, Allocation and Release) containing the ID's of neutron entries
-@route('/computeCapacity/', method='POST')
-@route('/computeCapacity', method='POST')
+@route('/calculateCapacity/', method='POST')
+@route('/calculateCapacity', method='POST')
 def computeCapacity():
   logger.info("Called")
-
+  
   try:
     req = json.load(request.body)
-  except ValueError as e:
+    
+
+    resource = req.get("Resource")
+    
+    if resource.get("Type") == "PublicIP":
+       if "Allocation" not in req:
+          allocations = []
+       else :
+          allocations = req.get("Allocation")
+       
+       if "Release" not in req:
+          releases = []
+       else:
+          releases = req.get("Release")
+
+       for release in releases:
+          resource["Attributes"]["IP-Pool"].append(release["Attributes"]["IP"])
+
+       for allocation in allocations: 
+          if allocation["Attributes"]["IP"] in resource["Attributes"]["IP-Pool"]:
+             resource["Attributes"]["IP-Pool"].remove(allocation["Attributes"]["IP"])
+          else:
+             return json.dumps({"result": {}}) 
+             
+    elif resource.get("Type") == "Subnet":
+      if "Allocation" not in req:
+          allocations = []
+      else:
+          allocations = req.get("Allocation")             
+       
+      if "Release" not in req:
+          releases = []
+      else:
+          releases = req.get("Release")
+       
+       
+      for release in releases:
+          subnet_names = [(i["name"], i["cidr"]) for i in resource["Attributes"]["AvailableSubNets"]] 
+          if (release["Attributes"]["Name"],release["Attributes"]["AddressRange"])  in subnet_names: 
+             
+             resource["Attributes"]["AvailableSubNets"] = filter(lambda x: x["name"] != \
+                               release["Attributes"]["Name"] or x["cidr"] != release["Attributes"]["AddressRange"], \
+                                   resource["Attributes"]["AvailableSubNets"])
+          else:
+             return json.dumps({"result": {}})     
+      
+      for allocation in allocations:
+          subnet_names = [i["name"] for i in resource["Attributes"]["AvailableSubNets"]]
+          subnet_cidr =  [i["cidr"] for i in resource["Attributes"]["AvailableSubNets"]]
+          if (allocation["Attributes"]["Name"] not in subnet_names) and \
+             (allocation["Attributes"]["AddressRange"] not in subnet_cidr):
+             
+             resource["Attributes"]["AvailableSubNets"].append( { "cidr": allocation["Attributes"]["AddressRange"], \
+                                                                  "name": allocation["Attributes"]["Name"] } )
+          else:
+             return json.dumps({"result": {}})              
+              
+  except Exception as e:
     response.status = 400
-    error = "computeCapacity was not supplied with a correct payload"
+    error = {"message" : e.message, "code" : response.status}
     logger.error(error)
-    return error
-
-  resource = req.get("Resource")
-  allocations = req.get("Allocation")
-  releases = req.get("Release")
-
-  for release in releases:
-    resource["Attributes"]["IpPool"].append(release["Attributes"]["IP"])
-
-  for allocation in allocations:
-    if allocation["Attributes"]["IP"] in resource["Attributes"]["IpPool"]:
-      resource["Attributes"]["IpPool"].remove(allocation["Attributes"]["IP"])
+    return json.dumps({"error": error})    
 
   response.set_header('Content-Type', 'application/json')
   response.set_header('Accept', '*/*')
@@ -173,7 +253,8 @@ def computeCapacity():
 
   logger.info("Completed")
   
-  return {"Resource": resource}
+  print ":::>", resource
+  return json.dumps({"result": {"Resource": resource}})
 
 
 #Expects a list of dictionaries containing "VirtualMachine" (ID/name of VM) and "floatingIP" (floatingIP to assign) 
@@ -181,16 +262,11 @@ def computeCapacity():
 @route('/createReservation', method='POST')
 def createReservation():
   logger.info("Called")
+  
+  global NET_ID
 
   try:
     req = json.load(request.body)
-  except ValueError:
-    response.status = 400
-    error = "createReservation was not supplied with a correct payload"
-    logger.error(error)
-    return error
-
-  try:
     allocations = req.get("Allocation")
     availableFloatingIPs = getAvailableFloatingIPs()
     availableSubnets = getAvailableSubnets()
@@ -226,16 +302,16 @@ def createReservation():
         else:
           raise Exception("floatingIP not available")
       elif typeN == "Subnet":
-        name = "HARNESS-"+allocation.get("Attributes").get("name")
+        name = "HARNESS-"+allocation.get("Attributes").get("Name")
         cidr = allocation.get("Attributes").get("AddressRange")
 
         print "cidr",cidr
         
         if cidr not in availableSubnets:
-          neutronIn = ["neutron", "subnet-create", "demo-net", "--name", name, cidr]
+          neutronIn = ["neutron", "subnet-create", NET_ID, "--name", name, cidr]
           process = subprocess.Popen(neutronIn, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
           neutronOut, neutronErr = process.communicate()
-
+          
           if (neutronOut.find("Created a new subnet") != -1):
             neutronOut = neutronOut.splitlines()
             reservations.append([x for x in neutronOut if " id " in x][0].split("|")[2].strip())  #Extract the subnet id from the returned string and add to array
@@ -264,17 +340,19 @@ def createReservation():
   #  print "Unable to create subnet",e
     #logger.error("Unable to reserve floating ip " + floatingIP + " for " + vmID)
     #reservations.append("Unable to add ip " + floatingIP + " to " + vmID + ". Check VM and IP exist and are unnassigned")
-  except Exception,e:
-    error = "unable to process the request: ",e
-    print error
-    logger.error(error)
+  except Exception as e:
+     response.status = 400
+     error = {"message" : e.message, "code" : response.status}
+     logger.error(error)
+     return json.dumps({"error": error})
+
 
   response.set_header('Content-Type', 'application/json')
   response.set_header('Accept', '*/*')
   response.set_header('Allow', 'GET, HEAD')
     
   logger.info("Completed")
-  return {"ReservationID": reservations}
+  return json.dumps({"result": {"ReservationID": reservations}})
 
 
 @route('/checkReservation/', method='POST')
@@ -284,13 +362,7 @@ def checkReservation():
 
   try:
     req = json.load(request.body)
-  except ValueError as e:
-    response.status = 400
-    error = "checkReservation was not supplied with a correct payload"
-    logger.error(error)
-    return error
 
-  try:
     reservationIDs = req.get("ReservationID")
     reservations = {}
 
@@ -299,11 +371,11 @@ def checkReservation():
       neutronEntry = getFIPEntryFromID(reservationID)
 
       if neutronEntry:
-        reservation["Ready"] = False
+        reservation["Ready"] = "False"
         #if (neutronEntry != False):
         if (neutronEntry["fixedIP"] != ""):
-          reservation["Address"] = neutronEntry["floatingIP"]
-          reservation["Ready"] = True
+          reservation["Address"] = [neutronEntry["floatingIP"]]
+          reservation["Ready"] = "True"
         #else:
         #  reservation["ERROR"] = "No matching reservation for " + reservationID
       else:
@@ -312,29 +384,30 @@ def checkReservation():
           #reservation["Ready"] = False
           #if (neutronEntry != False):
           #if (neutronEntry["fixedIP"] != ""):
-          reservation["ID"] = neutronEntry["name"]
-          reservation["AddressRange"] = neutronEntry["cidr"]
-          reservation["Ready"] = True
+          name = neutronEntry["name"]
+          if "HARNESS-" in name:
+             name = name.replace("HARNESS-", "")
+          reservation["Address"] = [name]
+          reservation["Ready"] = "True"
         else:
-          reservation["ERROR"] = "No matching reservation for " + reservationID
+          raise Exception("No matching reservation for " + reservationID)
         
       reservations[reservationID] = reservation
       
     reservations = {"Instances" : reservations}
+  except Exception as e:
+     response.status = 400
+     error = {"message" : e.message, "code" : response.status}
+     logger.error(error)
+     return json.dumps({"error": error})
+     
+  response.set_header('Content-Type', 'application/json')
+  response.set_header('Accept', '*/*')
+  response.set_header('Allow', 'GET, HEAD')
 
-    response.set_header('Content-Type', 'application/json')
-    response.set_header('Accept', '*/*')
-    response.set_header('Allow', 'GET, HEAD')
-
-    logger.info("Completed")
-    return reservations
-
-  except:
-    error = "checkReservation ran into an error, please check payload"
-    logger.error(error)
-    response.status = 400
-    return error
-
+  logger.info("Completed")
+    
+  return json.dumps({"result": reservations})
 
 @route('/releaseReservation/', method='DELETE')
 @route('/releaseReservation', method='DELETE')
@@ -344,13 +417,6 @@ def releaseReservation():
   try:
     #print ID
     req = json.load(request.body)
-  except ValueError:
-    response.status = 400
-    error =  "releaseReservation was not supplied with a correct payload"
-    return error
-    logger.error(error)
-
-  try:
     reservationIDs = req.get("ReservationID")
     availableFloatingIPIDs = getAvailableFloatingIPIDs()
     availableSubnetsIDs = getAvailableSubnetsIDs()
@@ -360,113 +426,118 @@ def releaseReservation():
         deleteSubnet(reservationID)
       elif reservationID in availableFloatingIPIDs:
        disassociateFloatingIP(reservationID)
+ 
+  except Exception as e:
+     response.status = 400
+     error = {"message" : e.message, "code" : response.status}
+     logger.error(error)
+     return json.dumps({"error": error})
+     
+  logger.info("Completed")
     
-    logger.info("Completed")
-    return {"result":{}}
-
-  except Exception.message,e:
-    print e
-    msg = "releaseReservation didn't execute properly, please check payload and neutron status"
-    print msg
-    logger.error(msg)
-    response.status = 400
-    error = {"message":msg,"code":response.status}
-    return error
-
-
+  return json.dumps({"result": {}})
+ 
 @route('/releaseAllReservations/', method='DELETE')
 @route('/releaseAllReservations', method='DELETE')
 def releaseAllReservations():
   logger.info("Called")
   
-  neutronFIPEntries = getNeutronFIPEntries()
-  neutronSubnetsEntries = getAvailableSubnets()
+  try:
+     neutronFIPEntries = getNeutronFIPEntries()
+     neutronSubnetsEntries = getAvailableSubnets()
 
-  for subnet in neutronSubnetsEntries:
-    if "HARNESS" in subnet.get('name'):
-      deleteSubnet(subnet.get('ID'))
+     for subnet in neutronSubnetsEntries:
+        if "HARNESS" in subnet.get('name'):
+          deleteSubnet(subnet.get('ID'))
 
-  for neutronEntry in neutronFIPEntries:
-    if neutronEntry["fixedIP"] != "":
-      disassociateFloatingIP(neutronEntry["ID"])
+     for neutronEntry in neutronFIPEntries:
+        if neutronEntry["fixedIP"] != "":
+           disassociateFloatingIP(neutronEntry["ID"])
   
-  logger.info("Completed")
-  return {"result":{}}
+     logger.info("Completed")
+  except Exception as e:
+     response.status = 400
+     error = {"message" : e.message, "code" : response.status}
+     logger.error(error)
+     return json.dumps({"error": error})   
+   
+  return json.dumps({"result":{}})
 
 ############################## reserveResources method from irm-net for creating subnets ##############################
 
-@route('/reserveResources/', method='POST')
-@route('/reserveResources', method='POST')
-def reserveResources():
-  logger.info("Called")
-  import subprocess
-  
-  try:
-    #print ID
-    req = json.load(request.body)
-  except ValueError:
-    response.status = 400
-    error = "reserveResources was not supplied with a payload, please enter desired payload"
-    logger.error(error)
-    return error
+#@route('/reserveResources/', method='POST')
+#@route('/reserveResources', method='POST')
+#def reserveResources():
+#  logger.info("Called")
+#  import subprocess
+#  
+#  global NET_ID
+#  try:
+#    print ID
+#    req = json.load(request.body)
+#  except ValueError:
+#    response.status = 400
+#    error = "reserveResources was not supplied with a payload, please enter desired payload"
+#    logger.error(error)
+#    return error
 
-  try:
-    reserveResource = req['Allocation']
-    #print reserveResource
-    #print reserveResource['ID']
-    #print reserveResource['Attributes']['AddressRange']
+#  try:
+#    reserveResource = req['Allocation']
+#    print reserveResource
+#    print reserveResource['ID']
+#    print reserveResource['Attributes']['AddressRange']
 
-    subnetIDS = []
-    #for reserveResource in reserveResources:
-    neutronIn = ["neutron", "subnet-create", "demo-net", "--name", reserveResource['ID'], reserveResource['Attributes']['AddressRange']]
-    process = subprocess.Popen(neutronIn, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    neutronOut, neutronErr = process.communicate()
-
-
-    
-    # ##FOR TESTING - REMOVE! ##
-    # neutronOut = "Created a new subnet:\n"
-    # neutronOut += "+------------------+--------------------------------------------------+\n"
-    # neutronOut += "| Field            | Value                                            |\n"
-    # neutronOut += "+------------------+--------------------------------------------------+\n"
-    # neutronOut += "| allocation_pools | {\"start\": \"192.168.2.2\", \"end\": \"192.168.2.254\l\"} |\n"
-    # neutronOut += "| cidr             | 192.168.2.0/24                                   |\n"
-    # neutronOut += "| dns_nameservers  |                                                  |\n"
-    # neutronOut += "| enable_dhcp      | True                                             |\n"
-    # neutronOut += "| gateway_ip       | 192.168.2.1                                      |\n"
-    # neutronOut += "| host_routes      |                                                  |\n"
-    # neutronOut += "| id               | 15a09f6c-87a5-4d14-b2cf-03d97cd4b456             |\n"
-    # neutronOut += "| ip_version       | 4                                                |\n"
-    # neutronOut += "| name             | subnet1                                          |\n"
-    # neutronOut += "| network_id       | 2d627131-c841-4e3a-ace6-f2dd75773b6d             |\n"
-    # neutronOut += "| tenant_id        | 3671f46ec35e4bbca6ef92ab7975e463                 |\n"
-    # neutronOut +=  "+------------------+--------------------------------------------------+"
-    # ##FOR TESTING FIX ME - REMOVE! ##
-    
-
-    if (neutronOut.find("Created a new subnet") != -1):
-      neutronOut = neutronOut.splitlines()
-      subnetIDS.append([x for x in neutronOut if " id " in x][0].split("|")[2].strip())  #Extract the subnet id from the returned string and add to array
-    else:
-      subnetIDS.append("ERROR (see logs)- Couldn't create " + reserveResource['ID'] + " @ " + reserveResource['Attributes']['AddressRange'])  #FIX ME - Waht should I do if failure
-      logger.error(neutronErr)
-
-    subnetIDS = {"Reservations": subnetIDS}
-    
-    response.set_header('Content-Type', 'application/json')
-    response.set_header('Accept', '*/*')
-    response.set_header('Allow', 'GET, HEAD')
-    
-    logger.info("Completed")
-    return subnetIDS
+#    subnetIDS = []
+#    for reserveResource in reserveResources:
+#    neutronIn = ["neutron", "subnet-create", NET_ID, "--name", reserveResource['ID'], reserveResource['Attributes']['AddressRange']]
+#    process = subprocess.Popen(neutronIn, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+#    neutronOut, neutronErr = process.communicate()
 
 
-  except Exception.message,e:
-    print e
-    error = "reserveResources Attempting to read non-existent key, please check payload"
-    logger.error(error)
-    response.status = 400
-    return error
+#    
+#     ##FOR TESTING - REMOVE! ##
+#     neutronOut = "Created a new subnet:\n"
+#     neutronOut += "+------------------+--------------------------------------------------+\n"
+#     neutronOut += "| Field            | Value                                            |\n"
+#     neutronOut += "+------------------+--------------------------------------------------+\n"
+#     neutronOut += "| allocation_pools | {\"start\": \"192.168.2.2\", \"end\": \"192.168.2.254\l\"} |\n"
+#     neutronOut += "| cidr             | 192.168.2.0/24                                   |\n"
+#     neutronOut += "| dns_nameservers  |                                                  |\n"
+#     neutronOut += "| enable_dhcp      | True                                             |\n"
+#     neutronOut += "| gateway_ip       | 192.168.2.1                                      |\n"
+#     neutronOut += "| host_routes      |                                                  |\n"
+#     neutronOut += "| id               | 15a09f6c-87a5-4d14-b2cf-03d97cd4b456             |\n"
+#     neutronOut += "| ip_version       | 4                                                |\n"
+#     neutronOut += "| name             | subnet1                                          |\n"
+#     neutronOut += "| network_id       | 2d627131-c841-4e3a-ace6-f2dd75773b6d             |\n"
+#     neutronOut += "| tenant_id        | 3671f46ec35e4bbca6ef92ab7975e463                 |\n"
+#     neutronOut +=  "+------------------+--------------------------------------------------+"
+#     ##FOR TESTING FIX ME - REMOVE! ##
+#    
+
+#    if (neutronOut.find("Created a new subnet") != -1):
+#      neutronOut = neutronOut.splitlines()
+#      subnetIDS.append([x for x in neutronOut if " id " in x][0].split("|")[2].strip())  Extract the subnet id from the returned string and add to array
+#    else:
+#      subnetIDS.append("ERROR (see logs)- Couldn't create " + reserveResource['ID'] + " @ " + reserveResource['Attributes']['AddressRange'])  FIX ME - Waht should I do if failure
+#      logger.error(neutronErr)
+
+#    subnetIDS = {"Reservations": subnetIDS}
+#    
+#    response.set_header('Content-Type', 'application/json')
+#    response.set_header('Accept', '*/*')
+#    response.set_header('Allow', 'GET, HEAD')
+#    
+#    logger.info("Completed")
+#    return subnetIDS
+
+
+#  except Exception.message,e:
+#    print e
+#    error = "reserveResources Attempting to read non-existent key, please check payload"
+#    logger.error(error)
+#    response.status = 400
+#    return error
 
 ################################## API Stuff - End ####################################
 ################################## Lib Stuff - Start ##################################
@@ -614,6 +685,25 @@ def getIDFromFloatingIP(floatingIP):
   logger.error("Unable to find matching entry for " + floatingIP)
   return False #If no matching entry found
 
+def registerIRM():
+    logger.info("Called")
+    logger.info( "ip:%s , port:%s, crs: %s" % (IP_ADDR, PORT_ADDR, CONFIG.get('CRS', 'CRS_URL')))
+    headers = {'content-type': 'application/json'}
+    try:
+       data = json.dumps(\
+       {\
+       #"Address":IP_ADDR,\
+       "Port":PORT_ADDR,\
+       "Name":"IRM-NEUTRON"\
+       })
+    except AttributeError:
+        logger.error("Failed to json.dumps into data")
+   
+    # add here a check if that flavor name exists already and in that case return the correspondent ID
+    # without trying to create a new one as it will fail
+    r = requests.post(CONFIG.get('CRS', 'CRS_URL')+'/registerManager', data, headers=headers)
+    logger.info("Completed!")
+
 
 def getifip(ifn):
   import fcntl, struct
@@ -632,6 +722,10 @@ def startAPI(IP_ADDR, PORT_ADDR):
       sys.exit(0)
   else:
       print"IRM API IP address:", IP_ADDR
+      if CONFIG.has_option('CRS', 'ACTIVE') and CONFIG.get('CRS', 'ACTIVE') == "on":
+            Thread(target=registerIRM).start()
+            print 'Registration with CRS done'
+            logger.info("Registration with CRS done")      
       API_HOST=run(host = IP_ADDR, port = PORT_ADDR)
   return IP_ADDR
 

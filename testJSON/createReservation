@@ -11,7 +11,7 @@
 		{
          "Type":"Subnet",
          "Attributes":{
-            "name":"mySub",
+            "Name":"mySub",
             "AddressRange":"192.168.0.0/24"
          }
       }

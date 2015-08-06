@@ -1,35 +1,45 @@
 {
-   "Resource":
-      {
-         "Type":"PublicIP",
-         "Attributes":{
-            "IpPool": ["192.168.1.2", "192.168.1.4", "192.168.1.5","192.168.1.6", "192.168.1.7", "192.168.1.8"]
-           }
-      },
+
+   "Resource": {
+        "Type": "PublicIP",
+        "Attributes": {
+           "IP-Pool": ["192.168.1.10", "192.168.1.9", "192.168.1.8"] 
+        }
+   },
    "Allocation":
       [
          {
+        "Type": "PublicIP",
             "Attributes":{
-               "IP":"192.168.1.8"
+               "IP": "192.168.1.10"
+               
              }         
          },
          {
+        "Type": "PublicIP",
             "Attributes":{
-               "IP":"192.168.1.11"
+               "IP": "192.168.1.23"
+               
              }         
          }
       ],
    "Release":
       [
          {
+        "Type": "PublicIP",
             "Attributes":{
-               "IP":"192.168.1.10"
+               "IP": "192.168.1.23"
+               
              }         
          },
          {
+        "Type": "PublicIP",
             "Attributes":{
-               "IP":"192.168.1.11"
+               "IP": "192.168.1.19"
+               
              }         
          }
       ]
+
+
 }
