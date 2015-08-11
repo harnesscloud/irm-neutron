@@ -130,7 +130,7 @@ def getResources():
          for x in getAvailableSubnets() if ("HARNESS-" in x['name']) ] 
       
       public_ips = {"Type" : "PublicIP", "Attributes" : { "IP-Pool": availableFloatingIPs}}
-      subnets = {"Type" : "Subnet", "Attributes" : { "AvailableSubNets": availableSubnets}}
+      subnets = {"Type" : "Subnet", "Attributes" : { "AvailableSubnets": availableSubnets}}
       
       r = {"Resources" : {"ID-P0": public_ips, "ID-S0": subnets }}
        
@@ -221,22 +221,22 @@ def computeCapacity():
        
        
       for release in releases:
-          subnet_names = [(i["name"], i["cidr"]) for i in resource["Attributes"]["AvailableSubNets"]] 
+          subnet_names = [(i["name"], i["cidr"]) for i in resource["Attributes"]["AvailableSubnets"]] 
           if (release["Attributes"]["Name"],release["Attributes"]["AddressRange"])  in subnet_names: 
              
-             resource["Attributes"]["AvailableSubNets"] = filter(lambda x: x["name"] != \
+             resource["Attributes"]["AvailableSubnets"] = filter(lambda x: x["name"] != \
                                release["Attributes"]["Name"] or x["cidr"] != release["Attributes"]["AddressRange"], \
-                                   resource["Attributes"]["AvailableSubNets"])
+                                   resource["Attributes"]["AvailableSubnets"])
           else:
              return json.dumps({"result": {}})     
       
       for allocation in allocations:
-          subnet_names = [i["name"] for i in resource["Attributes"]["AvailableSubNets"]]
-          subnet_cidr =  [i["cidr"] for i in resource["Attributes"]["AvailableSubNets"]]
+          subnet_names = [i["name"] for i in resource["Attributes"]["AvailableSubnets"]]
+          subnet_cidr =  [i["cidr"] for i in resource["Attributes"]["AvailableSubnets"]]
           if (allocation["Attributes"]["Name"] not in subnet_names) and \
              (allocation["Attributes"]["AddressRange"] not in subnet_cidr):
              
-             resource["Attributes"]["AvailableSubNets"].append( { "cidr": allocation["Attributes"]["AddressRange"], \
+             resource["Attributes"]["AvailableSubnets"].append( { "cidr": allocation["Attributes"]["AddressRange"], \
                                                                   "name": allocation["Attributes"]["Name"] } )
           else:
              return json.dumps({"result": {}})              
@@ -253,7 +253,6 @@ def computeCapacity():
 
   logger.info("Completed")
   
-  print ":::>", resource
   return json.dumps({"result": {"Resource": resource}})
 
 
@@ -280,9 +279,13 @@ def createReservation():
       #print "vmID",vmID
       #print "floatingIP",floatingIP
 
-      print "typeN",typeN
-      
       if typeN == "PublicIP":
+      
+        if "VM" not in allocation["Attributes"]:
+           raise Exception("VM missing in allocation request attributes!")
+        if "IP" not in allocation["Attributes"]:
+           raise Exception("IP missing in allocation request attributes!")        
+      
         vmID = allocation.get("Attributes").get("VM")
         floatingIP = allocation.get("Attributes").get("IP")
         print "VM",vmID
@@ -302,25 +305,31 @@ def createReservation():
         else:
           raise Exception("floatingIP not available")
       elif typeN == "Subnet":
+        if "Name" not in allocation["Attributes"]:
+           raise Exception("Name missing in allocation request attributes!")
+        if "AddressRange" not in allocation["Attributes"]:
+           raise Exception("AddressRange missing in allocation request attributes!")          
+            
         name = "HARNESS-"+allocation.get("Attributes").get("Name")
         cidr = allocation.get("Attributes").get("AddressRange")
-
-        print "cidr",cidr
         
-        if cidr not in availableSubnets:
+        print "cidr",cidr
+                
+        if len([x for x in availableSubnets if x['cidr'] == cidr or x['name'] == name]) == 0: 
           neutronIn = ["neutron", "subnet-create", NET_ID, "--name", name, cidr]
           process = subprocess.Popen(neutronIn, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
           neutronOut, neutronErr = process.communicate()
-          
+
           if (neutronOut.find("Created a new subnet") != -1):
             neutronOut = neutronOut.splitlines()
             reservations.append([x for x in neutronOut if " id " in x][0].split("|")[2].strip())  #Extract the subnet id from the returned string and add to array
           else:
-            reservations.append("ERROR (see logs)- Couldn't create " + allocation.get("ID") + " @ " + allocation.get("Attributes").get("AddressRange"))  #FIX ME - Waht should I do if failure
+            #reservations.append("ERROR (see logs)- Couldn't create " + allocation.get("ID") + " @ " + allocation.get("Attributes").get("AddressRange"))  #FIX ME - Waht should I do if failure
             logger.error(neutronErr)
             raise Exception(neutronErr)
         else:
-          raise Exception("cidr already used")
+          raise Exception("cidr %s or name %s already used" % \
+                (cidr, allocation.get("Attributes").get("Name")))
 
       #reservations = {"Reservations": reservations}
       
@@ -728,6 +737,9 @@ def startAPI(IP_ADDR, PORT_ADDR):
             logger.info("Registration with CRS done")      
       API_HOST=run(host = IP_ADDR, port = PORT_ADDR)
   return IP_ADDR
+
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
 
 
 if __name__ == '__main__':
