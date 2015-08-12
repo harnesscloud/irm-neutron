@@ -452,7 +452,7 @@ def releaseAllReservations():
   logger.info("Called")
   
   try:
-     neutronFIPEntries = getNeutronFIPEntries()
+     neutronFIPEntries = getNeutronHARNESSactiveFIPEntries()
      neutronSubnetsEntries = getAvailableSubnets()
 
      for subnet in neutronSubnetsEntries:
@@ -589,6 +589,22 @@ def getNeutronFIPEntries():
   logger.info("Completed")
   return neutronFIPEntries
 
+def getNeutronHARNESSactiveFIPEntries():
+  logger.info("Called")
+  neutronFIPEntries = []
+  novaHARNESSEntries = []
+  neutronHARNESSactiveFIPEntries = []
+
+  neutronFIPEntries = getNeutronFIPEntries()
+  novaHARNESSEntries = getNovaHARNESSlist()
+
+  for neutronEntry in neutronFIPEntries:
+    fIP = neutronEntry['floatingIP']
+    if fIP in novaHARNESSEntries[0]['NET']:
+      neutronHARNESSactiveFIPEntries.append(neutronEntry)
+  
+  logger.info("Completed")
+  return neutronHARNESSactiveFIPEntries
 
 def getAvailableFloatingIPs():
   logger.info("Called")
@@ -613,6 +629,26 @@ def getAvailableFloatingIPIDs():
   
   logger.info("Completed")
   return availableFloatingIPIDs
+
+def getNovaHARNESSlist():
+  logger.info("Called")
+  novaHARNESSEntries = []
+  
+  novaIn = ["nova", "list"]
+  process = subprocess.Popen(novaIn, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  novaOut, novaErr = process.communicate()
+  
+  novaOut = novaOut.splitlines()[3:-1]
+  for novaEntry in novaOut:
+    entry = {}
+    entry["ID"] = novaEntry.split("|")[1].strip()
+    entry["Name"] = novaEntry.split("|")[2].strip()
+    entry["NET"] = novaEntry.split("|")[6].strip()
+    if "HARNESS" in entry["Name"]:
+      novaHARNESSEntries.append(entry)
+  
+  logger.info("Completed")
+  return novaHARNESSEntries
 
 def getAvailableSubnets():
   logger.info("Called")
