@@ -180,12 +180,10 @@ def getAllocSpec():
 @route('/calculateCapacity/', method='POST')
 @route('/calculateCapacity', method='POST')
 def computeCapacity():
-  logger.info("Called")
-  
+  logger.info("Called")  
   try:
     req = json.load(request.body)
     
-
     resource = req.get("Resource")
     
     if resource.get("Type") == "PublicIP":
@@ -218,7 +216,6 @@ def computeCapacity():
           releases = []
       else:
           releases = req.get("Release")
-       
        
       for release in releases:
           subnet_names = [(i["name"], i["cidr"]) for i in resource["Attributes"]["AvailableSubnets"]] 
@@ -450,11 +447,10 @@ def releaseReservation():
 @route('/releaseAllReservations', method='DELETE')
 def releaseAllReservations():
   logger.info("Called")
-  
+
   try:
      neutronFIPEntries = getNeutronHARNESSactiveFIPEntries()
      neutronSubnetsEntries = getAvailableSubnets()
-
      for subnet in neutronSubnetsEntries:
         if "HARNESS" in subnet.get('name'):
           deleteSubnet(subnet.get('ID'))
@@ -600,7 +596,7 @@ def getNeutronHARNESSactiveFIPEntries():
 
   for neutronEntry in neutronFIPEntries:
     fIP = neutronEntry['floatingIP']
-    if fIP in novaHARNESSEntries[0]['NET']:
+    if len(novaHARNESSEntries) > 0 and fIP in novaHARNESSEntries[0]['NET']:
       neutronHARNESSactiveFIPEntries.append(neutronEntry)
   
   logger.info("Completed")
