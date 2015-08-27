@@ -51,8 +51,8 @@ def init(interface):
      os.environ['OS_AUTH_URL'] = "http://%s/v2.0" % CONFIG.get('main','NOVA_ENDPOINT')
   
   global NET_ID   
-  if CONFIG.has_option('main', 'NET_ID'):
-     NET_ID = CONFIG.get('main','NET_ID')
+  if CONFIG.has_option('network', 'NET_ID'):
+     NET_ID = CONFIG.get('network','NET_ID')
   else:
      NET_ID = "demo-net"
      
