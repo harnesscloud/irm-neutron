@@ -38,21 +38,21 @@ def init(interface):
   global TYPE
   TYPE = "Network"
   
-  if CONFIG.has_option('openstack', 'OS_USERNAME'):
-     os.environ['OS_USERNAME'] = CONFIG.get('openstack', 'OS_USERNAME')
+  if CONFIG.has_option('main', 'USERNAME'):
+     os.environ['OS_USERNAME'] = CONFIG.get('main', 'USERNAME')
      
-  if CONFIG.has_option('openstack', 'OS_TENANT_NAME'):
-     os.environ['OS_TENANT_NAME'] = CONFIG.get('openstack','OS_TENANT_NAME')
+  if CONFIG.has_option('main', 'TENANT_NAME'):
+     os.environ['OS_TENANT_NAME'] = CONFIG.get('main','TENANT_NAME')
 
-  if CONFIG.has_option('openstack', 'OS_PASSWORD'):
-     os.environ['OS_PASSWORD'] = CONFIG.get('openstack','OS_PASSWORD')
+  if CONFIG.has_option('main', 'PASSWORD'):
+     os.environ['OS_PASSWORD'] = CONFIG.get('main','PASSWORD')
 
-  if CONFIG.has_option('openstack', 'OS_USERNAME'):
-     os.environ['OS_AUTH_URL'] = CONFIG.get('openstack','OS_AUTH_URL')
+  if CONFIG.has_option('main', 'NOVA_ENDPOINT'):
+     os.environ['OS_AUTH_URL'] = "http://%s/v2.0" % CONFIG.get('main','NOVA_ENDPOINT')
   
   global NET_ID   
-  if CONFIG.has_option('openstack', 'NET_ID'):
-     NET_ID = CONFIG.get('openstack','NET_ID')
+  if CONFIG.has_option('main', 'NET_ID'):
+     NET_ID = CONFIG.get('main','NET_ID')
   else:
      NET_ID = "demo-net"
      
